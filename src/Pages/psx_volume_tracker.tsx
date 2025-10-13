@@ -284,7 +284,7 @@ const PSXVolumeTracker = () => {
     const gainFromDayLow =
       ((currentPrice - history.dayLow) / history.dayLow) * 100;
 
-    // All conditions met - add to surge list as NEW alert
+    // All conditions met - add to surge list as NEW alert (ensure only one per symbol)
     const surgeData = {
       ...stock,
       alertId: `${symbol}-${Date.now()}`, // Unique ID for each alert instance
@@ -301,7 +301,11 @@ const PSXVolumeTracker = () => {
       surgeTime: new Date(),
     };
 
-    setSurgeStocks((prev) => [...prev, surgeData].slice(-20));
+    setSurgeStocks((prev) => {
+      // Remove any existing alert for this symbol to ensure only one
+      const filtered = prev.filter((s) => s.symbol !== symbol);
+      return [...filtered, surgeData].slice(-20);
+    });
   };
 
   const updateExistingSurge = (
@@ -348,6 +352,11 @@ const PSXVolumeTracker = () => {
     if (vol >= 1000) return `${(vol / 1000).toFixed(2)}K`;
     return vol?.toString();
   };
+
+  // Sort surge stocks by surgeTime descending (latest on top)
+  const sortedSurgeStocks = [...surgeStocks].sort(
+    (a, b) => new Date(b.surgeTime) - new Date(a.surgeTime)
+  );
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-6">
@@ -449,11 +458,11 @@ const PSXVolumeTracker = () => {
               Active Volume Surge Alerts
             </h2>
             <span className="ml-auto bg-emerald-500/20 text-emerald-300 px-3 py-1 rounded-full text-sm font-medium">
-              {surgeStocks.length} Active
+              {sortedSurgeStocks.length} Active
             </span>
           </div>
 
-          {surgeStocks.length === 0 ? (
+          {sortedSurgeStocks.length === 0 ? (
             <div className="text-center py-12 text-slate-400">
               <AlertCircle className="w-12 h-12 mx-auto mb-3 opacity-50" />
               <p>No active volume surges</p>
@@ -463,7 +472,7 @@ const PSXVolumeTracker = () => {
             </div>
           ) : (
             <div className="grid gap-3">
-              {surgeStocks.map((stock) => (
+              {sortedSurgeStocks.map((stock) => (
                 <div
                   key={stock.alertId}
                   className="bg-gradient-to-r from-emerald-500/10 to-teal-500/10 border border-emerald-500/30 rounded-lg p-4 hover:border-emerald-500/50 transition-all"
