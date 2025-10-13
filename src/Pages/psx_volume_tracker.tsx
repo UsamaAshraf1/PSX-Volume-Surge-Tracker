@@ -9,111 +9,10 @@ const PSXVolumeTracker = () => {
   const [minVolume, setMinVolume] = useState(50000);
   const [surgeThreshold, setSurgeThreshold] = useState(1.2);
   const [showSettings, setShowSettings] = useState(false);
-  const volumeHistory = useRef({});
+  const [trackedSymbols, setTrackedSymbols] = useState([]);
+  const candleHistory = useRef({});
   const wsRef = useRef(null);
 
-  const trackedSymbols = [
-    "KEL",
-    "PTC",
-    "BOP",
-    "CNERGY",
-    "PIBTL",
-    "FFL",
-    "PAEL",
-    "SEARL",
-    "PSO",
-    "HUBC",
-    "TRG",
-    "SYS",
-    "NBP",
-    "SSGC",
-    "FCCL",
-    "UNITY",
-    "PPL",
-    "MLCF",
-    "OGDC",
-    "CPHL",
-    "AKBL",
-    "HCAR",
-    "FABL",
-    "BAFL",
-    "HUMNL",
-    "AIRLINK",
-    "SNGP",
-    "FFC",
-    "YOUW",
-    "LUCK",
-    "HBL",
-    "PSX",
-    "MARI",
-    "DGKC",
-    "LOTCHEM",
-    "MCB",
-    "NML",
-    "KOHC",
-    "UBL",
-    "ATRL",
-    "ABL",
-    "ENGROH",
-    "GHNI",
-    "EFERT",
-    "MEBL",
-    "APL",
-    "BAHL",
-    "KAPCO",
-    "AICL",
-    "FATIMA",
-    "ISL",
-    "GAL",
-    "PIOC",
-    "TGL",
-    "DHPL",
-    "CHCC",
-    "PSEL",
-    "POL",
-    "AGP",
-    "ILP",
-    "NATF",
-    "DCR",
-    "JVDC",
-    "GHGL",
-    "SCBPL",
-    "SAZEW",
-    "HALEON",
-    "HINOON",
-    "INIL",
-    "HGFA",
-    "GLAXO",
-    "KTML",
-    "PABC",
-    "MTL",
-    "HMB",
-    "LCI",
-    "INDU",
-    "SSOM",
-    "SHFA",
-    "PGLC",
-    "FHAM",
-    "PKGS",
-    "BNWM",
-    "PAKT",
-    "GADT",
-    "BWCL",
-    "MUREB",
-    "COLG",
-    "ABOT",
-    "PKGP",
-    "THALL",
-    "TPLRF1",
-    "ATLH",
-    "MEHT",
-    "SRVI",
-    "JDWS",
-    "NESTLE",
-    "UPFL",
-    "RMPL",
-    "IBFL",
-  ];
   // Check if market is open (9:30 AM - 3:30 PM PKT)
   useEffect(() => {
     const checkMarketHours = () => {
@@ -121,8 +20,8 @@ const PSXVolumeTracker = () => {
       const hours = now.getHours();
       const minutes = now.getMinutes();
       const currentMinutes = hours * 60 + minutes;
-      const marketOpen = 9 * 60 + 30; // 9:30 AM
-      const marketClose = 15 * 60 + 30; // 3:30 PM
+      const marketOpen = 9 * 60 + 30;
+      const marketClose = 15 * 60 + 30;
 
       setIsMarketOpen(
         currentMinutes >= marketOpen && currentMinutes < marketClose
@@ -135,9 +34,39 @@ const PSXVolumeTracker = () => {
     return () => clearInterval(interval);
   }, []);
 
-  // WebSocket connection setup
+  // Fetch stock list from API and setup WebSocket
   useEffect(() => {
-    const connectWebSocket = () => {
+    const fetchStockList = async () => {
+      try {
+        // TODO: Replace with your actual API endpoint
+        const response = await fetch(
+          "https://ielapis.u2ventures.io/api/psxApi/search/all-stocks/"
+        );
+        const stockList = await response.json();
+
+        // Assuming API returns array of symbols or objects with symbol property
+        const symbols = Array.isArray(stockList.stocks)
+          ? stockList?.stocks?.map((item) =>
+              typeof item === "string" ? item : item.symbol
+            )
+          : [];
+
+        console.log(stockList);
+        console.log(symbols);
+        setTrackedSymbols(symbols);
+        return symbols;
+      } catch (error) {
+        console.error("Error fetching stock list:", error);
+        // Fallback to a small list for testing
+        const fallbackSymbols = ["PSO", "OGDC", "PPL", "HBL", "MCB"];
+        setTrackedSymbols(fallbackSymbols);
+        return fallbackSymbols;
+      }
+    };
+
+    const connectWebSocket = async () => {
+      const symbols = await fetchStockList();
+
       wsRef.current = new WebSocket(
         "wss://ielapis.u2ventures.io/ws/market/feed/"
       );
@@ -145,7 +74,7 @@ const PSXVolumeTracker = () => {
       wsRef.current.onopen = () => {
         console.log("WebSocket connected");
         // Subscribe to all tracked symbols
-        trackedSymbols.forEach((symbol) => {
+        symbols.forEach((symbol) => {
           wsRef.current.send(JSON.stringify({ symbol }));
         });
       };
@@ -156,28 +85,9 @@ const PSXVolumeTracker = () => {
           if (msg.message === "Received tick" && msg.data?.type === "tick") {
             const tick = msg.data.data;
             const symbol = tick.s;
-            if (!trackedSymbols.includes(symbol)) return;
+            if (!symbols.includes(symbol)) return;
 
-            const stock = {
-              symbol,
-              price: tick.c.toFixed(2),
-              volume: tick.v,
-              change: (tick.pch * 100).toFixed(2),
-              timestamp: new Date(tick.t * 1000),
-            };
-
-            setStocks((prev) => {
-              const index = prev.findIndex((s) => s.symbol === symbol);
-              if (index > -1) {
-                const newStocks = [...prev];
-                newStocks[index] = stock;
-                return newStocks;
-              } else {
-                return [...prev, stock];
-              }
-            });
-
-            processVolumeData([stock]);
+            processTick(tick);
           }
         } catch (e) {
           console.error("Error parsing WebSocket message:", e);
@@ -202,108 +112,187 @@ const PSXVolumeTracker = () => {
     };
   }, []);
 
-  // Process volume data and check conditions
-  const processVolumeData = (stockData) => {
-    stockData.forEach((stock) => {
-      const symbol = stock.symbol;
-      const now = stock.timestamp;
-      const fiveMinBlock = Math.floor(now.getTime() / (5 * 60 * 1000));
-      const cumVol = stock.volume;
+  // Process individual tick and build 1-minute candles
+  const processTick = (tick) => {
+    const symbol = tick.s;
+    const price = tick.c;
+    const volume = tick.v;
+    const timestamp = new Date(tick.t * 1000);
+    const ldcp = tick.ldcp || tick.pc || price; // Last day close price
+    const dayLow = tick.l || price;
+    const priceChange = tick.pch * 100;
 
-      let history = volumeHistory.current[symbol];
-      if (!history) {
-        history = {
-          lastCum: 0,
-          currentBlock: fiveMinBlock,
-          currentBlockVol: 0,
-          blocks: {},
-          intradayBlockVols: [],
-        };
-        volumeHistory.current[symbol] = history;
+    const oneMinBlock = Math.floor(timestamp.getTime() / (1 * 60 * 1000));
+
+    let history = candleHistory.current[symbol];
+    if (!history) {
+      history = {
+        currentBlock: oneMinBlock,
+        currentCandle: {
+          open: price,
+          high: price,
+          low: price,
+          close: price,
+          volume: 0,
+          startVol: volume,
+        },
+        completedCandles: [],
+        ldcp: ldcp,
+        dayLow: dayLow,
+      };
+      candleHistory.current[symbol] = history;
+    }
+
+    // Update day low
+    history.dayLow = Math.min(history.dayLow, dayLow);
+
+    // Check if we moved to a new 1-minute block
+    if (oneMinBlock !== history.currentBlock) {
+      // Finalize previous candle
+      if (history.currentCandle.volume > 0) {
+        history.completedCandles.push({
+          ...history.currentCandle,
+          block: history.currentBlock,
+        });
+        // Keep last 30 candles
+        if (history.completedCandles.length > 30) {
+          history.completedCandles.shift();
+        }
       }
 
-      const deltaVol = cumVol - history.lastCum;
-      history.lastCum = cumVol;
+      // Start new candle
+      history.currentBlock = oneMinBlock;
+      history.currentCandle = {
+        open: price,
+        high: price,
+        low: price,
+        close: price,
+        volume: 0,
+        startVol: volume,
+      };
+    }
 
-      let currentBlockVol;
-      if (fiveMinBlock !== history.currentBlock) {
-        // Finalize previous block
-        if (history.currentBlockVol > 0) {
-          history.blocks[history.currentBlock] = history.currentBlockVol;
-          history.intradayBlockVols.push(history.currentBlockVol);
-        }
-        // Start new block
-        history.currentBlock = fiveMinBlock;
-        history.currentBlockVol = deltaVol;
-        currentBlockVol = deltaVol;
+    // Update current candle
+    history.currentCandle.high = Math.max(history.currentCandle.high, price);
+    history.currentCandle.low = Math.min(history.currentCandle.low, price);
+    history.currentCandle.close = price;
+    history.currentCandle.volume = volume - history.currentCandle.startVol;
+
+    // Update live stock display
+    const stock = {
+      symbol,
+      price: price.toFixed(2),
+      volume: volume,
+      change: priceChange.toFixed(2),
+      timestamp: timestamp,
+      ldcp: ldcp,
+      dayLow: history.dayLow,
+    };
+
+    setStocks((prev) => {
+      const index = prev.findIndex((s) => s.symbol === symbol);
+      if (index > -1) {
+        const newStocks = [...prev];
+        newStocks[index] = stock;
+        return newStocks;
       } else {
-        history.currentBlockVol += deltaVol;
-        currentBlockVol = history.currentBlockVol;
+        return [...prev, stock];
       }
-
-      // Calculate intraday average volume (average of completed block volumes)
-      const intradayAvg =
-        history.intradayBlockVols.length > 0
-          ? history.intradayBlockVols.reduce((a, b) => a + b, 0) /
-            history.intradayBlockVols.length
-          : 0;
-
-      // Get last 2 completed blocks average
-      const completedBlocks = Object.keys(history.blocks)
-        .map(Number)
-        .sort((a, b) => b - a)
-        .slice(0, 2);
-
-      let last2BlocksAvg = 0;
-      if (completedBlocks.length >= 2) {
-        last2BlocksAvg =
-          completedBlocks.reduce(
-            (sum, block) => sum + (history.blocks[block] || 0),
-            0
-          ) / 2;
-      } else if (completedBlocks.length === 1) {
-        last2BlocksAvg = history.blocks[completedBlocks[0]] || 0;
-      }
-
-      // Check if current block volume meets conditions
-      const meetsVolumeThreshold = currentBlockVol >= minVolume;
-      const exceedsIntradayAvg =
-        intradayAvg > 0 && currentBlockVol > intradayAvg * surgeThreshold;
-      const exceedsLast2Blocks =
-        last2BlocksAvg > 0 && currentBlockVol > last2BlocksAvg * surgeThreshold;
-
-      const isSurge =
-        meetsVolumeThreshold && (exceedsIntradayAvg || exceedsLast2Blocks);
-
-      setSurgeStocks((prev) => {
-        const existingIndex = prev.findIndex((s) => s.symbol === stock.symbol);
-        const surgeData = {
-          ...stock,
-          currentBlockVol,
-          intradayAvg,
-          last2BlocksAvg,
-          exceedsIntradayAvg,
-          exceedsLast2Blocks,
-          surgeTime: new Date(),
-        };
-
-        if (isSurge) {
-          if (existingIndex > -1) {
-            const newSurges = [...prev];
-            newSurges[existingIndex] = surgeData;
-            return newSurges;
-          } else {
-            return [...prev, surgeData].slice(-20);
-          }
-        } else {
-          // Remove if no longer surging
-          if (existingIndex > -1) {
-            return prev.filter((s) => s.symbol !== stock.symbol);
-          }
-          return prev;
-        }
-      });
     });
+
+    // Check for surge conditions
+    checkSurgeConditions(symbol, history, stock);
+  };
+
+  // Check if stock meets surge conditions
+  const checkSurgeConditions = (symbol, history, stock) => {
+    const currentCandle = history.currentCandle;
+    const completedCandles = history.completedCandles;
+
+    // Need at least 1 completed candle to compare
+    if (completedCandles.length === 0) return;
+
+    const currentPrice = currentCandle.close;
+    const currentVolume = currentCandle.volume;
+    const previousCandle = completedCandles[completedCandles.length - 1];
+
+    // Filter 1: Current price must be > previous candle close (uptrend)
+    if (currentPrice <= previousCandle.close) {
+      removeSurgeStock(symbol);
+      return;
+    }
+
+    // Filter 2: Volume must meet minimum threshold
+    if (currentVolume < minVolume) {
+      removeSurgeStock(symbol);
+      return;
+    }
+
+    // Calculate average volume from completed candles
+    const intradayAvgVolume =
+      completedCandles.length > 0
+        ? completedCandles.reduce((sum, c) => sum + c.volume, 0) /
+          completedCandles.length
+        : 0;
+
+    // Calculate last 2 candles average volume
+    const last2Candles = completedCandles.slice(-2);
+    const last2AvgVolume =
+      last2Candles.length > 0
+        ? last2Candles.reduce((sum, c) => sum + c.volume, 0) /
+          last2Candles.length
+        : 0;
+
+    // Filter 4: Volume surge detection
+    const exceedsIntradayAvg =
+      intradayAvgVolume > 0 &&
+      currentVolume > intradayAvgVolume * surgeThreshold;
+    const exceedsLast2Avg =
+      last2AvgVolume > 0 && currentVolume > last2AvgVolume * surgeThreshold;
+
+    const hasVolumeSurge = exceedsIntradayAvg || exceedsLast2Avg;
+
+    if (!hasVolumeSurge) {
+      removeSurgeStock(symbol);
+      return;
+    }
+
+    // Calculate % gain from previous candle
+    const gainFromPrevCandle =
+      ((currentPrice - previousCandle.close) / previousCandle.close) * 100;
+
+    // Calculate % from day low
+    const gainFromDayLow =
+      ((currentPrice - history.dayLow) / history.dayLow) * 100;
+
+    // All conditions met - add to surge list
+    const surgeData = {
+      ...stock,
+      currentVolume,
+      intradayAvgVolume,
+      last2AvgVolume,
+      exceedsIntradayAvg,
+      exceedsLast2Avg,
+      gainFromPrevCandle: gainFromPrevCandle.toFixed(2),
+      gainFromDayLow: gainFromDayLow.toFixed(2),
+      prevCandleClose: previousCandle.close.toFixed(2),
+      surgeTime: new Date(),
+    };
+
+    setSurgeStocks((prev) => {
+      const existingIndex = prev.findIndex((s) => s.symbol === symbol);
+      if (existingIndex > -1) {
+        const newSurges = [...prev];
+        newSurges[existingIndex] = surgeData;
+        return newSurges;
+      } else {
+        return [...prev, surgeData].slice(-20);
+      }
+    });
+  };
+
+  const removeSurgeStock = (symbol) => {
+    setSurgeStocks((prev) => prev.filter((s) => s.symbol !== symbol));
   };
 
   const formatVolume = (vol) => {
@@ -325,7 +314,7 @@ const PSXVolumeTracker = () => {
                   PSX Volume Surge Tracker
                 </h1>
                 <p className="text-slate-400 mt-1">
-                  KSE-100 Index • 5-Minute Intervals
+                  1-Minute Candles • Trend Detection
                 </p>
               </div>
             </div>
@@ -370,12 +359,14 @@ const PSXVolumeTracker = () => {
             <div className="grid md:grid-cols-2 gap-6">
               <div>
                 <label className="block text-slate-300 mb-2 font-medium">
-                  Minimum Volume Threshold
+                  Minimum Volume Threshold (per 1-min candle)
                 </label>
                 <input
                   type="number"
                   value={minVolume}
-                  onChange={(e) => setMinVolume(Number(e.target.value))}
+                  onChange={(e: { target: { value: any } }) =>
+                    setMinVolume(Number(e.target.value))
+                  }
                   className="w-full bg-slate-700 text-white px-4 py-2 rounded-lg border border-slate-600 focus:border-emerald-400 focus:outline-none"
                   placeholder="e.g., 50000"
                 />
@@ -396,7 +387,7 @@ const PSXVolumeTracker = () => {
                   placeholder="e.g., 1.2"
                 />
                 <p className="text-slate-400 text-sm mt-1">
-                  Current volume must be{" "}
+                  Candle volume must be{" "}
                   {((surgeThreshold - 1) * 100).toFixed(0)}% higher than average
                 </p>
               </div>
@@ -421,111 +412,112 @@ const PSXVolumeTracker = () => {
               <AlertCircle className="w-12 h-12 mx-auto mb-3 opacity-50" />
               <p>No volume surges detected yet</p>
               <p className="text-sm mt-1">
-                Surges based on WebSocket tick data will appear here
+                Stocks with volume surge + uptrend will appear here
               </p>
             </div>
           ) : (
             <div className="grid gap-3">
-              {surgeStocks
-                .filter((stock) => parseFloat(stock.change) >= 0)
-                .map((stock, idx) => (
-                  <div
-                    key={`${stock.symbol}-${idx}`}
-                    className="bg-gradient-to-r from-amber-500/10 to-orange-500/10 border border-amber-500/30 rounded-lg p-4 hover:border-amber-500/50 transition-all"
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-4">
-                        <div className="bg-amber-500/20 p-3 rounded-lg">
-                          <TrendingUp className="w-6 h-6 text-amber-400" />
-                        </div>
-                        <div>
-                          <h3 className="text-xl font-bold text-white">
-                            {stock.symbol}
-                          </h3>
-                          <p className="text-slate-400 text-sm">
-                            {stock.exceedsIntradayAvg && (
-                              <span className="text-emerald-400">
-                                ✓ Intraday Avg
-                              </span>
+              {surgeStocks.map((stock, idx) => (
+                <div
+                  key={`${stock.symbol}-${idx}`}
+                  className="bg-gradient-to-r from-emerald-500/10 to-teal-500/10 border border-emerald-500/30 rounded-lg p-4 hover:border-emerald-500/50 transition-all"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-4">
+                      <div className="bg-emerald-500/20 p-3 rounded-lg">
+                        <TrendingUp className="w-6 h-6 text-emerald-400" />
+                      </div>
+                      <div>
+                        <h3 className="text-xl font-bold text-white">
+                          {stock.symbol}
+                        </h3>
+                        <p className="text-slate-400 text-sm">
+                          {stock.exceedsIntradayAvg && (
+                            <span className="text-emerald-400">
+                              ✓ Intraday Avg
+                            </span>
+                          )}
+                          {stock.exceedsIntradayAvg &&
+                            stock.exceedsLast2Avg && (
+                              <span className="mx-1">•</span>
                             )}
-                            {stock.exceedsIntradayAvg &&
-                              stock.exceedsLast2Blocks && (
-                                <span className="mx-1">•</span>
-                              )}
-                            {stock.exceedsLast2Blocks && (
-                              <span className="text-emerald-400">
-                                ✓ Last 2 Blocks
-                              </span>
-                            )}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="text-2xl font-bold text-white">
-                          Rs {stock.price}
-                        </div>
-                        <div
-                          className={`text-sm font-medium ${
-                            parseFloat(stock.change) >= 0
-                              ? "text-emerald-400"
-                              : "text-red-400"
-                          }`}
-                        >
-                          {parseFloat(stock.change) >= 0 ? "+" : ""}
-                          {stock.change}%
-                        </div>
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-4 gap-4 mt-4 pt-4 border-t border-amber-500/20">
-                      <div>
-                        <p className="text-slate-400 text-xs mb-1">
-                          Current Block Vol
-                        </p>
-                        <p className="text-white font-semibold">
-                          {formatVolume(stock.currentBlockVol)}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-slate-400 text-xs mb-1">
-                          Intraday Avg
-                        </p>
-                        <p className="text-white font-semibold">
-                          {formatVolume(stock.intradayAvg)}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-slate-400 text-xs mb-1">
-                          Last 2 Blocks
-                        </p>
-                        <p className="text-white font-semibold">
-                          {formatVolume(stock.last2BlocksAvg)}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-slate-400 text-xs mb-1">
-                          Detected At
-                        </p>
-                        <p className="text-white font-semibold">
-                          {new Date(stock.surgeTime).toLocaleTimeString(
-                            "en-PK",
-                            {
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            }
+                          {stock.exceedsLast2Avg && (
+                            <span className="text-emerald-400">
+                              ✓ Last 2 Candles
+                            </span>
                           )}
                         </p>
                       </div>
                     </div>
+                    <div className="text-right">
+                      <div className="text-2xl font-bold text-white">
+                        Rs {stock.price}
+                      </div>
+                      <div
+                        className={`text-sm font-medium ${
+                          parseFloat(stock.change) >= 0
+                            ? "text-emerald-400"
+                            : "text-amber-400"
+                        }`}
+                      >
+                        {parseFloat(stock.change) >= 0 ? "+" : ""}
+                        {stock.change}%
+                      </div>
+                    </div>
                   </div>
-                ))}
+                  <div className="grid grid-cols-5 gap-3 mt-4 pt-4 border-t border-emerald-500/20">
+                    <div>
+                      <p className="text-slate-400 text-xs mb-1">Current Vol</p>
+                      <p className="text-white font-semibold">
+                        {formatVolume(stock.currentVolume)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-slate-400 text-xs mb-1">
+                        Intraday Avg
+                      </p>
+                      <p className="text-white font-semibold">
+                        {formatVolume(stock.intradayAvgVolume)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-slate-400 text-xs mb-1">
+                        Gain from Prev
+                      </p>
+                      <p className="text-emerald-400 font-semibold">
+                        +{stock.gainFromPrevCandle}%
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-slate-400 text-xs mb-1">
+                        From Day Low
+                      </p>
+                      <p className="text-emerald-400 font-semibold">
+                        +{stock.gainFromDayLow}%
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-slate-400 text-xs mb-1">Detected At</p>
+                      <p className="text-white font-semibold">
+                        {new Date(stock.surgeTime).toLocaleTimeString("en-PK", {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </div>
 
         {/* All Stocks Grid */}
         <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-6 border border-slate-700">
-          <h2 className="text-xl font-bold text-white mb-4">Live Stock Feed</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <h2 className="text-xl font-bold text-white mb-4">
+            Live Stock Feed ({stocks.length} stocks)
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {stocks.map((stock, idx) => (
               <div
                 key={`${stock.symbol}-${idx}`}
@@ -568,25 +560,31 @@ const PSXVolumeTracker = () => {
 
         {/* Instructions */}
         <div className="mt-6 bg-blue-500/10 border border-blue-500/30 rounded-lg p-4">
-          <p className="text-blue-300 text-sm">
-            <strong>Setup Instructions:</strong> WebSocket connected to PSX feed
-            at{" "}
-            <code className="bg-slate-700 px-2 py-1 rounded">
-              wss://ielapis.u2ventures.io/ws/market/feed/
-            </code>
-            . Subscribed to tracked KSE-100 symbols on connection. The app
-            processes ticks for these symbols and detects surges when 5-minute
-            block volume exceeds thresholds.
+          <p className="text-blue-300 text-sm mb-2">
+            <strong>Enhanced Detection System:</strong>
           </p>
-          <ul className="text-blue-300 text-sm mt-2 ml-4 list-disc">
-            <li>Volume surges based on cumulative deltas in 5-minute blocks</li>
-            <li>Minimum block volume threshold (default: 50K, adjustable)</li>
+          <ul className="text-blue-300 text-sm space-y-1 ml-4 list-disc">
             <li>
-              Current block volume exceeds intraday block average OR last 2
-              blocks average by multiplier
+              <strong>1-minute candles</strong> built from tick data for faster
+              detection
             </li>
-            <li>Thresholds dynamically adjustable via the settings panel</li>
-            <li>Surges are removed when conditions no longer met</li>
+            <li>
+              <strong>Volume surge:</strong> Current candle volume exceeds
+              intraday OR last 2 candles average
+            </li>
+            <li>
+              <strong>Uptrend filter:</strong> Current price must be greater
+              than previous candle close
+            </li>
+            <li>
+              <strong>No LDCP filter:</strong> Catches both breakouts and strong
+              recovery plays
+            </li>
+            <li>
+              <strong>Dynamic stock list:</strong> Fetched from API on startup
+              (update YOUR_API_ENDPOINT_HERE)
+            </li>
+            <li>Stocks removed from alerts when conditions no longer met</li>
           </ul>
         </div>
       </div>
