@@ -4,6 +4,7 @@ import { TrendingUp, Activity, AlertCircle, Settings } from "lucide-react";
 const PSXVolumeTracker = () => {
   const [stocks, setStocks] = useState([]);
   const [surgeStocks, setSurgeStocks] = useState([]);
+  const [exitedStocks, setExitedStocks] = useState([]);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [isMarketOpen, setIsMarketOpen] = useState(false);
   const [minVolume, setMinVolume] = useState(50000);
@@ -51,8 +52,6 @@ const PSXVolumeTracker = () => {
             )
           : [];
 
-        console.log(stockList);
-        console.log(symbols);
         setTrackedSymbols(symbols);
         return symbols;
       } catch (error) {
@@ -216,15 +215,36 @@ const PSXVolumeTracker = () => {
     const currentVolume = currentCandle.volume;
     const previousCandle = completedCandles[completedCandles.length - 1];
 
+    // Check if stock is currently in active surge list
+    const existingAlert = surgeStocks.find((s) => s.symbol === symbol);
+
+    // EXIT CONDITION: If stock was in surge but price broke below previous candle
+    if (existingAlert && currentPrice <= previousCandle.close) {
+      moveToExited(existingAlert);
+      return;
+    }
+
+    // If already in surge and still above previous candle, keep it (don't re-evaluate volume)
+    if (existingAlert && currentPrice > previousCandle.close) {
+      // Just update the current data without removing
+      updateExistingSurge(
+        symbol,
+        stock,
+        currentCandle,
+        previousCandle,
+        history
+      );
+      return;
+    }
+
+    // NEW ENTRY CONDITIONS (only for stocks not currently in surge)
     // Filter 1: Current price must be > previous candle close (uptrend)
     if (currentPrice <= previousCandle.close) {
-      removeSurgeStock(symbol);
       return;
     }
 
     // Filter 2: Volume must meet minimum threshold
     if (currentVolume < minVolume) {
-      removeSurgeStock(symbol);
       return;
     }
 
@@ -243,7 +263,7 @@ const PSXVolumeTracker = () => {
           last2Candles.length
         : 0;
 
-    // Filter 4: Volume surge detection
+    // Filter 3: Volume surge detection
     const exceedsIntradayAvg =
       intradayAvgVolume > 0 &&
       currentVolume > intradayAvgVolume * surgeThreshold;
@@ -253,7 +273,6 @@ const PSXVolumeTracker = () => {
     const hasVolumeSurge = exceedsIntradayAvg || exceedsLast2Avg;
 
     if (!hasVolumeSurge) {
-      removeSurgeStock(symbol);
       return;
     }
 
@@ -265,9 +284,12 @@ const PSXVolumeTracker = () => {
     const gainFromDayLow =
       ((currentPrice - history.dayLow) / history.dayLow) * 100;
 
-    // All conditions met - add to surge list
+    // All conditions met - add to surge list as NEW alert
     const surgeData = {
       ...stock,
+      alertId: `${symbol}-${Date.now()}`, // Unique ID for each alert instance
+      entryPrice: currentPrice,
+      entryTime: new Date(),
       currentVolume,
       intradayAvgVolume,
       last2AvgVolume,
@@ -279,20 +301,46 @@ const PSXVolumeTracker = () => {
       surgeTime: new Date(),
     };
 
-    setSurgeStocks((prev) => {
-      const existingIndex = prev.findIndex((s) => s.symbol === symbol);
-      if (existingIndex > -1) {
-        const newSurges = [...prev];
-        newSurges[existingIndex] = surgeData;
-        return newSurges;
-      } else {
-        return [...prev, surgeData].slice(-20);
-      }
-    });
+    setSurgeStocks((prev) => [...prev, surgeData].slice(-20));
   };
 
-  const removeSurgeStock = (symbol) => {
-    setSurgeStocks((prev) => prev.filter((s) => s.symbol !== symbol));
+  const updateExistingSurge = (
+    symbol,
+    stock,
+    currentCandle,
+    previousCandle,
+    history
+  ) => {
+    const currentPrice = currentCandle.close;
+    const gainFromPrevCandle =
+      ((currentPrice - previousCandle.close) / previousCandle.close) * 100;
+    const gainFromDayLow =
+      ((currentPrice - history.dayLow) / history.dayLow) * 100;
+
+    setSurgeStocks((prev) =>
+      prev.map((s) => {
+        if (s.symbol === symbol) {
+          return {
+            ...s,
+            ...stock,
+            currentVolume: currentCandle.volume,
+            gainFromPrevCandle: gainFromPrevCandle.toFixed(2),
+            gainFromDayLow: gainFromDayLow.toFixed(2),
+            prevCandleClose: previousCandle.close.toFixed(2),
+          };
+        }
+        return s;
+      })
+    );
+  };
+
+  const moveToExited = (alert) => {
+    setSurgeStocks((prev) => prev.filter((s) => s.alertId !== alert.alertId));
+    setExitedStocks((prev) => [...prev, { ...alert, exitTime: new Date() }]);
+  };
+
+  const dismissExited = (alertId) => {
+    setExitedStocks((prev) => prev.filter((s) => s.alertId !== alertId));
   };
 
   const formatVolume = (vol) => {
@@ -364,9 +412,7 @@ const PSXVolumeTracker = () => {
                 <input
                   type="number"
                   value={minVolume}
-                  onChange={(e: { target: { value: any } }) =>
-                    setMinVolume(Number(e.target.value))
-                  }
+                  onChange={(e) => setMinVolume(Number(e.target.value))}
                   className="w-full bg-slate-700 text-white px-4 py-2 rounded-lg border border-slate-600 focus:border-emerald-400 focus:outline-none"
                   placeholder="e.g., 50000"
                 />
@@ -400,9 +446,9 @@ const PSXVolumeTracker = () => {
           <div className="flex items-center gap-2 mb-4">
             <TrendingUp className="w-6 h-6 text-amber-400" />
             <h2 className="text-xl font-bold text-white">
-              Volume Surge Alerts
+              Active Volume Surge Alerts
             </h2>
-            <span className="ml-auto bg-amber-500/20 text-amber-300 px-3 py-1 rounded-full text-sm font-medium">
+            <span className="ml-auto bg-emerald-500/20 text-emerald-300 px-3 py-1 rounded-full text-sm font-medium">
               {surgeStocks.length} Active
             </span>
           </div>
@@ -410,16 +456,16 @@ const PSXVolumeTracker = () => {
           {surgeStocks.length === 0 ? (
             <div className="text-center py-12 text-slate-400">
               <AlertCircle className="w-12 h-12 mx-auto mb-3 opacity-50" />
-              <p>No volume surges detected yet</p>
+              <p>No active volume surges</p>
               <p className="text-sm mt-1">
                 Stocks with volume surge + uptrend will appear here
               </p>
             </div>
           ) : (
             <div className="grid gap-3">
-              {surgeStocks.map((stock, idx) => (
+              {surgeStocks.map((stock) => (
                 <div
-                  key={`${stock.symbol}-${idx}`}
+                  key={stock.alertId}
                   className="bg-gradient-to-r from-emerald-500/10 to-teal-500/10 border border-emerald-500/30 rounded-lg p-4 hover:border-emerald-500/50 transition-all"
                 >
                   <div className="flex items-center justify-between">
@@ -497,9 +543,9 @@ const PSXVolumeTracker = () => {
                       </p>
                     </div>
                     <div>
-                      <p className="text-slate-400 text-xs mb-1">Detected At</p>
+                      <p className="text-slate-400 text-xs mb-1">Alert Time</p>
                       <p className="text-white font-semibold">
-                        {new Date(stock.surgeTime).toLocaleTimeString("en-PK", {
+                        {new Date(stock.entryTime).toLocaleTimeString("en-PK", {
                           hour: "2-digit",
                           minute: "2-digit",
                         })}
@@ -512,81 +558,182 @@ const PSXVolumeTracker = () => {
           )}
         </div>
 
-        {/* All Stocks Grid */}
-        <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-6 border border-slate-700">
-          <h2 className="text-xl font-bold text-white mb-4">
-            Live Stock Feed ({stocks.length} stocks)
-          </h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {stocks.map((stock, idx) => (
-              <div
-                key={`${stock.symbol}-${idx}`}
-                className="bg-slate-700/30 rounded-lg p-4 border border-slate-600 hover:border-slate-500 transition-all"
-              >
-                <div className="flex justify-between items-start mb-3">
-                  <h3 className="text-lg font-bold text-white">
-                    {stock.symbol}
-                  </h3>
-                  <span
-                    className={`text-sm font-medium px-2 py-1 rounded ${
-                      parseFloat(stock.change) >= 0
-                        ? "bg-emerald-500/20 text-emerald-400"
-                        : "bg-red-500/20 text-red-400"
-                    }`}
-                  >
-                    {parseFloat(stock.change) >= 0 ? "+" : ""}
-                    {stock.change}%
-                  </span>
-                </div>
-                <div className="text-2xl font-bold text-white mb-2">
-                  Rs {stock.price}
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-slate-400">Session Volume</span>
-                  <span
-                    className={`font-semibold ${
-                      stock.volume > 100000
-                        ? "text-emerald-400"
-                        : "text-slate-300"
-                    }`}
-                  >
-                    {formatVolume(stock.volume)}
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
+        {/* Exited Alerts */}
+        {exitedStocks.length > 0 && (
+          <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-6 mb-6 border border-slate-700">
+            <div className="flex items-center gap-2 mb-4">
+              <AlertCircle className="w-6 h-6 text-slate-400" />
+              <h2 className="text-xl font-bold text-white">Exited Alerts</h2>
+              <span className="ml-auto bg-slate-500/20 text-slate-300 px-3 py-1 rounded-full text-sm font-medium">
+                {exitedStocks.length} Exited
+              </span>
+            </div>
 
-        {/* Instructions */}
-        <div className="mt-6 bg-blue-500/10 border border-blue-500/30 rounded-lg p-4">
-          <p className="text-blue-300 text-sm mb-2">
-            <strong>Enhanced Detection System:</strong>
-          </p>
-          <ul className="text-blue-300 text-sm space-y-1 ml-4 list-disc">
-            <li>
-              <strong>1-minute candles</strong> built from tick data for faster
-              detection
-            </li>
-            <li>
-              <strong>Volume surge:</strong> Current candle volume exceeds
-              intraday OR last 2 candles average
-            </li>
-            <li>
-              <strong>Uptrend filter:</strong> Current price must be greater
-              than previous candle close
-            </li>
-            <li>
-              <strong>No LDCP filter:</strong> Catches both breakouts and strong
-              recovery plays
-            </li>
-            <li>
-              <strong>Dynamic stock list:</strong> Fetched from API on startup
-              (update YOUR_API_ENDPOINT_HERE)
-            </li>
-            <li>Stocks removed from alerts when conditions no longer met</li>
-          </ul>
+            <div className="grid gap-3">
+              {exitedStocks.map((stock) => (
+                <div
+                  key={stock.alertId}
+                  className="bg-slate-700/30 border border-slate-600 rounded-lg p-4 opacity-60"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-4">
+                      <div className="bg-slate-600/50 p-3 rounded-lg">
+                        <TrendingUp className="w-6 h-6 text-slate-400" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-xl font-bold text-slate-300">
+                            {stock.symbol}
+                          </h3>
+                          <span className="bg-red-500/20 text-red-400 px-2 py-0.5 rounded text-xs font-semibold">
+                            EXITED
+                          </span>
+                        </div>
+                        <p className="text-slate-500 text-sm">
+                          Price broke below previous candle
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-4">
+                      <div className="text-right">
+                        <div className="text-xl font-bold text-slate-300">
+                          Rs {stock.price}
+                        </div>
+                        <div className="text-sm text-slate-400">
+                          Exit:{" "}
+                          {new Date(stock.exitTime).toLocaleTimeString(
+                            "en-PK",
+                            {
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            }
+                          )}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => dismissExited(stock.alertId)}
+                        className="bg-slate-600 hover:bg-slate-500 text-slate-300 px-4 py-2 rounded-lg transition-colors text-sm font-medium"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-4 gap-3 mt-4 pt-4 border-t border-slate-600">
+                    <div>
+                      <p className="text-slate-500 text-xs mb-1">Entry Time</p>
+                      <p className="text-slate-300 font-semibold">
+                        {new Date(stock.entryTime).toLocaleTimeString("en-PK", {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-slate-500 text-xs mb-1">Entry Price</p>
+                      <p className="text-slate-300 font-semibold">
+                        Rs {stock.entryPrice.toFixed(2)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-slate-500 text-xs mb-1">Exit Price</p>
+                      <p className="text-slate-300 font-semibold">
+                        Rs {stock.price}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-slate-500 text-xs mb-1">Duration</p>
+                      <p className="text-slate-300 font-semibold">
+                        {Math.floor(
+                          (new Date(stock.exitTime) -
+                            new Date(stock.entryTime)) /
+                            60000
+                        )}
+                        m
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* All Stocks Grid */}
+      <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-6 border border-slate-700">
+        <h2 className="text-xl font-bold text-white mb-4">
+          Live Stock Feed ({stocks.length} stocks)
+        </h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+          {stocks.map((stock, idx) => (
+            <div
+              key={`${stock.symbol}-${idx}`}
+              className="bg-slate-700/30 rounded-lg p-4 border border-slate-600 hover:border-slate-500 transition-all"
+            >
+              <div className="flex justify-between items-start mb-3">
+                <h3 className="text-lg font-bold text-white">{stock.symbol}</h3>
+                <span
+                  className={`text-sm font-medium px-2 py-1 rounded ${
+                    parseFloat(stock.change) >= 0
+                      ? "bg-emerald-500/20 text-emerald-400"
+                      : "bg-red-500/20 text-red-400"
+                  }`}
+                >
+                  {parseFloat(stock.change) >= 0 ? "+" : ""}
+                  {stock.change}%
+                </span>
+              </div>
+              <div className="text-2xl font-bold text-white mb-2">
+                Rs {stock.price}
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-slate-400">Session Volume</span>
+                <span
+                  className={`font-semibold ${
+                    stock.volume > 100000
+                      ? "text-emerald-400"
+                      : "text-slate-300"
+                  }`}
+                >
+                  {formatVolume(stock.volume)}
+                </span>
+              </div>
+            </div>
+          ))}
         </div>
+      </div>
+
+      {/* Instructions */}
+      <div className="mt-6 bg-blue-500/10 border border-blue-500/30 rounded-lg p-4">
+        <p className="text-blue-300 text-sm mb-2">
+          <strong>Enhanced Detection System:</strong>
+        </p>
+        <ul className="text-blue-300 text-sm space-y-1 ml-4 list-disc">
+          <li>
+            <strong>1-minute candles</strong> built from tick data for faster
+            detection
+          </li>
+          <li>
+            <strong>Entry:</strong> Volume surge + Current price &gt; previous
+            candle close
+          </li>
+          <li>
+            <strong>Sticky alerts:</strong> Once triggered, stays active until
+            exit condition
+          </li>
+          <li>
+            <strong>Exit:</strong> Alert grays out when price drops below
+            previous candle close
+          </li>
+          <li>
+            <strong>Re-entry:</strong> Dismissed stocks can trigger new alerts
+            if conditions met again
+          </li>
+          <li>
+            <strong>Dynamic stock list:</strong> Fetched from API on startup
+            (update YOUR_API_ENDPOINT_HERE)
+          </li>
+        </ul>
       </div>
     </div>
   );
