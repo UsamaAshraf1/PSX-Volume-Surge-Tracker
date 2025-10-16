@@ -4,11 +4,8 @@ import { TrendingUp, Activity, AlertCircle, Settings } from "lucide-react";
 const PSXVolumeTracker = () => {
   const [stocks, setStocks] = useState([]);
   const [surgeStocks, setSurgeStocks] = useState([]);
-  const [exitedStocks, setExitedStocks] = useState([]);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [isMarketOpen, setIsMarketOpen] = useState(false);
-  const [minVolume, setMinVolume] = useState(50000);
-  const [surgeThreshold, setSurgeThreshold] = useState(1.2);
   const [showSettings, setShowSettings] = useState(false);
   const [trackedSymbols, setTrackedSymbols] = useState([]);
   const candleHistory = useRef({});
@@ -239,6 +236,7 @@ const PSXVolumeTracker = () => {
       change: priceChange.toFixed(2),
       timestamp: timestamp,
       ldcp: ldcp,
+      history, // Include history for surge logic
     };
 
     setStocks((prev) => {
@@ -252,60 +250,46 @@ const PSXVolumeTracker = () => {
       }
     });
 
-    // Check for surge conditions
-    checkSurgeConditions(symbol, history, stock);
+    // Check/update surge conditions
+    const existingAlert = surgeStocks.find((s) => s.symbol === symbol);
+    if (existingAlert) {
+      updateExistingSurges(symbol, history, stock);
+    } else {
+      checkSurgeConditions(symbol, history, stock);
+    }
   };
 
-  // Check if stock meets surge conditions
+  // ✅ Detect New Surges (updated logic)
   const checkSurgeConditions = (symbol, history, stock) => {
-    const currentCandle = history.currentCandle;
-    const completedCandles = history.completedCandles;
-
-    // Need at least 2 completed candles to compare
-    if (completedCandles.length < 2) return;
+    const completedCandles = history.completedCandles || [];
+    const currentCandle = history.currentCandle || {};
+    if (completedCandles.length < 2 || !currentCandle) return;
 
     const previousCandle = completedCandles[completedCandles.length - 1];
-    const currentPrice = currentCandle.close;
     const currentVolume = currentCandle.volume;
-
-    // Compute averages and exceeds
     const intradayAvgVolume =
-      completedCandles.reduce((sum, c) => sum + c.volume, 0) /
-      completedCandles.length;
-
+      completedCandles.reduce((acc, c) => acc + c.volume, 0) / completedCandles.length;
     const last2Candles = completedCandles.slice(-2);
     const last2AvgVolume =
       last2Candles.length > 0
-        ? last2Candles.reduce((sum, c) => sum + c.volume, 0) /
-          last2Candles.length
+        ? last2Candles.reduce((acc, c) => acc + c.volume, 0) / last2Candles.length
         : 0;
 
-    const exceedsIntradayAvg =
-      intradayAvgVolume > 0 &&
-      currentVolume > intradayAvgVolume * surgeThreshold;
-    const exceedsLast2Avg =
-      last2AvgVolume > 0 && currentVolume > last2AvgVolume * surgeThreshold;
+    const exceedsIntradayAvg = currentVolume > intradayAvgVolume;
+    const exceedsLast2Avg = currentVolume > last2AvgVolume;
 
+    const currentPrice = currentCandle.close;
     const gainFromPrevCandle =
       ((currentPrice - previousCandle.close) / previousCandle.close) * 100;
-
-    // Compute day range from candles
-    const dayHigh = Math.max(...completedCandles.map((c) => c.high), currentCandle.high);
     const dayLow = Math.min(...completedCandles.map((c) => c.low), currentCandle.low);
-    const gainFromDayLow =
-      ((currentPrice - dayLow) / dayLow) * 100;
+    const gainFromDayLow = ((currentPrice - dayLow) / dayLow) * 100;
 
-    // Check if stock is currently in active surge list
-    const existingAlert = surgeStocks.find((s) => s.symbol === symbol);
-
-    // EXIT CONDITION: If stock was in surge but price broke below previous candle
-    if (existingAlert && currentPrice <= previousCandle.close) {
-      moveToExited(existingAlert);
-      return;
-    }
-
-    // If already in surge and still above previous candle, update it
-    if (existingAlert && currentPrice > previousCandle.close) {
+    if (
+      exceedsIntradayAvg &&
+      exceedsLast2Avg &&
+      gainFromPrevCandle > 0.5 &&
+      gainFromDayLow > 1
+    ) {
       const score = calculateSignalScore({
         currentVolume,
         intradayAvgVolume,
@@ -317,50 +301,58 @@ const PSXVolumeTracker = () => {
         completedCandles,
         currentCandle,
       });
-      const signalStrength = getSignalStrength(score);
 
-      setSurgeStocks((prev) =>
-        prev.map((s) => {
-          if (s.symbol === symbol) {
-            return {
-              ...s,
-              ...stock,
-              currentVolume,
-              gainFromPrevCandle: gainFromPrevCandle.toFixed(2),
-              gainFromDayLow: gainFromDayLow.toFixed(2),
-              prevCandleClose: previousCandle.close.toFixed(2),
-              signalScore: score,
-              signalStrength,
-            };
-          }
-          return s;
-        })
-      );
-      return;
+      const surgeData = {
+        ...stock,
+        alertId: `${symbol}-alert`,
+        entryPrice: currentPrice,
+        entryTime: new Date(),
+        currentVolume,
+        intradayAvgVolume,
+        last2AvgVolume,
+        exceedsIntradayAvg,
+        exceedsLast2Avg,
+        gainFromPrevCandle: gainFromPrevCandle.toFixed(2),
+        gainFromDayLow: gainFromDayLow.toFixed(2),
+        prevCandleClose: previousCandle.close.toFixed(2),
+        surgeTime: new Date(),
+        signalScore: score,
+        signalStrength: getSignalStrength(score),
+        lastUpdated: new Date(),
+      };
+
+      setSurgeStocks((prev) => {
+        // Remove any existing alert for this symbol to ensure only one
+        const filtered = prev.filter((s) => s.symbol !== symbol);
+        return [...filtered, surgeData].slice(-20);
+      });
     }
+  };
 
-    // NEW ENTRY CONDITIONS (only for stocks not currently in surge)
-    // Filter 1: Current price must be > previous candle close (uptrend)
-    if (currentPrice <= previousCandle.close) {
-      return;
-    }
+  // ✅ Update Existing Signals Continuously (new function)
+  const updateExistingSurges = (symbol, history, stock) => {
+    const completedCandles = history.completedCandles || [];
+    const currentCandle = history.currentCandle || {};
+    if (completedCandles.length < 2 || !currentCandle) return;
 
-    // Filter 2: Volume must meet minimum threshold
-    if (currentVolume < minVolume) {
-      return;
-    }
+    const previousCandle = completedCandles[completedCandles.length - 1];
+    const currentVolume = currentCandle.volume;
+    const intradayAvgVolume =
+      completedCandles.reduce((acc, c) => acc + c.volume, 0) / completedCandles.length;
+    const last2Candles = completedCandles.slice(-2);
+    const last2AvgVolume =
+      last2Candles.length > 0
+        ? last2Candles.reduce((acc, c) => acc + c.volume, 0) / last2Candles.length
+        : 0;
 
-    // Filter 3: Volume surge detection (require both)
-    if (!exceedsIntradayAvg || !exceedsLast2Avg) {
-      return;
-    }
+    const exceedsIntradayAvg = currentVolume > intradayAvgVolume;
+    const exceedsLast2Avg = currentVolume > last2AvgVolume;
+    const currentPrice = currentCandle.close;
+    const gainFromPrevCandle =
+      ((currentPrice - previousCandle.close) / previousCandle.close) * 100;
+    const dayLow = Math.min(...completedCandles.map((c) => c.low), currentCandle.low);
+    const gainFromDayLow = ((currentPrice - dayLow) / dayLow) * 100;
 
-    // Filter 4: Minimum gains
-    if (gainFromPrevCandle <= 0.5 || gainFromDayLow <= 1) {
-      return;
-    }
-
-    // Calculate score
     const score = calculateSignalScore({
       currentVolume,
       intradayAvgVolume,
@@ -372,41 +364,25 @@ const PSXVolumeTracker = () => {
       completedCandles,
       currentCandle,
     });
-    const signalStrength = getSignalStrength(score);
 
-    // All conditions met - add to surge list as NEW alert (ensure only one per symbol)
-    const surgeData = {
-      ...stock,
-      alertId: `${symbol}-${Date.now()}`, // Unique ID for each alert instance
-      entryPrice: currentPrice,
-      entryTime: new Date(),
-      currentVolume,
-      intradayAvgVolume,
-      last2AvgVolume,
-      exceedsIntradayAvg,
-      exceedsLast2Avg,
-      gainFromPrevCandle: gainFromPrevCandle.toFixed(2),
-      gainFromDayLow: gainFromDayLow.toFixed(2),
-      prevCandleClose: previousCandle.close.toFixed(2),
-      surgeTime: new Date(),
-      signalScore: score,
-      signalStrength,
-    };
-
-    setSurgeStocks((prev) => {
-      // Remove any existing alert for this symbol to ensure only one
-      const filtered = prev.filter((s) => s.symbol !== symbol);
-      return [...filtered, surgeData].slice(-20);
-    });
-  };
-
-  const moveToExited = (alert) => {
-    setSurgeStocks((prev) => prev.filter((s) => s.alertId !== alert.alertId));
-    setExitedStocks((prev) => [...prev, { ...alert, exitTime: new Date() }]);
-  };
-
-  const dismissExited = (alertId) => {
-    setExitedStocks((prev) => prev.filter((s) => s.alertId !== alertId));
+    setSurgeStocks((prev) =>
+      prev.map((s) => {
+        if (s.symbol === symbol) {
+          return {
+            ...s,
+            ...stock,
+            currentVolume,
+            gainFromPrevCandle: gainFromPrevCandle.toFixed(2),
+            gainFromDayLow: gainFromDayLow.toFixed(2),
+            prevCandleClose: previousCandle.close.toFixed(2),
+            signalScore: score,
+            signalStrength: getSignalStrength(score),
+            lastUpdated: new Date(),
+          };
+        }
+        return s;
+      })
+    );
   };
 
   const formatVolume = (vol) => {
@@ -482,13 +458,13 @@ const PSXVolumeTracker = () => {
                 </label>
                 <input
                   type="number"
-                  value={minVolume}
-                  onChange={(e) => setMinVolume(Number(e.target.value))}
-                  className="w-full bg-slate-700 text-white px-4 py-2 rounded-lg border border-slate-600 focus:border-emerald-400 focus:outline-none"
-                  placeholder="e.g., 50000"
+                  value={0}
+                  disabled
+                  className="w-full bg-slate-700 text-white px-4 py-2 rounded-lg border border-slate-600 focus:border-emerald-400 focus:outline-none opacity-50"
+                  placeholder="Fixed at 0"
                 />
                 <p className="text-slate-400 text-sm mt-1">
-                  Current: {formatVolume(minVolume)}
+                  Current: No minimum
                 </p>
               </div>
               <div>
@@ -498,14 +474,13 @@ const PSXVolumeTracker = () => {
                 <input
                   type="number"
                   step="0.1"
-                  value={surgeThreshold}
-                  onChange={(e) => setSurgeThreshold(Number(e.target.value))}
-                  className="w-full bg-slate-700 text-white px-4 py-2 rounded-lg border border-slate-600 focus:border-emerald-400 focus:outline-none"
-                  placeholder="e.g., 1.2"
+                  value={1}
+                  disabled
+                  className="w-full bg-slate-700 text-white px-4 py-2 rounded-lg border border-slate-600 focus:border-emerald-400 focus:outline-none opacity-50"
+                  placeholder="Fixed at 1.0"
                 />
                 <p className="text-slate-400 text-sm mt-1">
-                  Candle volume must be{" "}
-                  {((surgeThreshold - 1) * 100).toFixed(0)}% higher than average
+                  Candle volume must exceed average
                 </p>
               </div>
             </div>
@@ -615,15 +590,12 @@ const PSXVolumeTracker = () => {
                         </p>
                       </div>
                       <div>
-                        <p className="text-slate-400 text-xs mb-1">Entry</p>
+                        <p className="text-slate-400 text-xs mb-1">Updated</p>
                         <p className="text-white font-semibold">
-                          Rs {stock.entryPrice?.toFixed(2)}
-                          <span className="block text-xs text-slate-400 mt-0.5">
-                            {new Date(stock.entryTime).toLocaleTimeString("en-PK", {
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })}
-                          </span>
+                          {new Date(stock.lastUpdated).toLocaleTimeString("en-PK", {
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
                         </p>
                       </div>
                     </div>
@@ -633,106 +605,6 @@ const PSXVolumeTracker = () => {
             </div>
           )}
         </div>
-
-        {/* Exited Alerts */}
-        {exitedStocks.length > 0 && (
-          <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-6 mb-6 border border-slate-700">
-            <div className="flex items-center gap-2 mb-4">
-              <AlertCircle className="w-6 h-6 text-slate-400" />
-              <h2 className="text-xl font-bold text-white">Exited Alerts</h2>
-              <span className="ml-auto bg-slate-500/20 text-slate-300 px-3 py-1 rounded-full text-sm font-medium">
-                {exitedStocks.length} Exited
-              </span>
-            </div>
-
-            <div className="grid gap-3">
-              {exitedStocks.map((stock) => (
-                <div
-                  key={stock.alertId}
-                  className="bg-slate-700/30 border border-slate-600 rounded-lg p-4 opacity-60"
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-4">
-                      <div className="bg-slate-600/50 p-3 rounded-lg">
-                        <TrendingUp className="w-6 h-6 text-slate-400" />
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h3 className="text-xl font-bold text-slate-300">
-                            {stock.symbol}
-                          </h3>
-                          <span className="bg-red-500/20 text-red-400 px-2 py-0.5 rounded text-xs font-semibold">
-                            EXITED
-                          </span>
-                        </div>
-                        <p className="text-slate-500 text-sm">
-                          Price broke below previous candle
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-4">
-                      <div className="text-right">
-                        <div className="text-xl font-bold text-slate-300">
-                          Rs {stock.price}
-                        </div>
-                        <div className="text-sm text-slate-400">
-                          Exit:{" "}
-                          {new Date(stock.exitTime).toLocaleTimeString(
-                            "en-PK",
-                            {
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            }
-                          )}
-                        </div>
-                      </div>
-                      <button
-                        onClick={() => dismissExited(stock.alertId)}
-                        className="bg-slate-600 hover:bg-slate-500 text-slate-300 px-4 py-2 rounded-lg transition-colors text-sm font-medium"
-                      >
-                        Dismiss
-                      </button>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-4 gap-3 mt-4 pt-4 border-t border-slate-600">
-                    <div>
-                      <p className="text-slate-500 text-xs mb-1">Entry Time</p>
-                      <p className="text-slate-300 font-semibold">
-                        {new Date(stock.entryTime).toLocaleTimeString("en-PK", {
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-slate-500 text-xs mb-1">Entry Price</p>
-                      <p className="text-slate-300 font-semibold">
-                        Rs {stock.entryPrice.toFixed(2)}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-slate-500 text-xs mb-1">Exit Price</p>
-                      <p className="text-slate-300 font-semibold">
-                        Rs {stock.price}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-slate-500 text-xs mb-1">Duration</p>
-                      <p className="text-slate-300 font-semibold">
-                        {Math.floor(
-                          (new Date(stock.exitTime) -
-                            new Date(stock.entryTime)) /
-                            60000
-                        )}
-                        m
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
       </div>
 
       {/* All Stocks Grid */}
@@ -790,24 +662,16 @@ const PSXVolumeTracker = () => {
             detection
           </li>
           <li>
-            <strong>Entry:</strong> Volume surge + Current price &gt; previous
-            candle close
+            <strong>Entry:</strong> Volume surge (exceeds avg) + gain from prev &gt; 0.5%
           </li>
           <li>
-            <strong>Sticky alerts:</strong> Once triggered, stays active until
-            exit condition
+            <strong>Continuous updates:</strong> Existing alerts update on every tick
           </li>
           <li>
-            <strong>Exit:</strong> Alert grays out when price drops below
-            previous candle close
-          </li>
-          <li>
-            <strong>Re-entry:</strong> Dismissed stocks can trigger new alerts
-            if conditions met again
+            <strong>No exit conditions:</strong> Alerts persist until market close
           </li>
           <li>
             <strong>Dynamic stock list:</strong> Fetched from API on startup
-            (update YOUR_API_ENDPOINT_HERE)
           </li>
         </ul>
       </div>
