@@ -41,8 +41,14 @@ const PSXVolumeTracker = () => {
     else if (gainFromPrevCandle > 0) score += 5;
 
     // 3️⃣ Price Position vs Day Range (20 pts)
-    const dayHigh = Math.max(...completedCandles.map((c) => c.high), currentCandle.high);
-    const dayLow = Math.min(...completedCandles.map((c) => c.low), currentCandle.low);
+    const dayHigh = Math.max(
+      ...completedCandles.map((c) => c.high),
+      currentCandle.high
+    );
+    const dayLow = Math.min(
+      ...completedCandles.map((c) => c.low),
+      currentCandle.low
+    );
     const range = dayHigh - dayLow || 1;
     const position = ((currentCandle.close - dayLow) / range) * 100;
     if (position > 90) score += 20;
@@ -55,7 +61,9 @@ const PSXVolumeTracker = () => {
     else if (exceedsIntradayAvg || exceedsLast2Avg) score += 8;
 
     // 5️⃣ Candle Consistency (10 pts)
-    const greenCandles = completedCandles.slice(-3).filter((c) => c.close > c.open).length;
+    const greenCandles = completedCandles
+      .slice(-3)
+      .filter((c) => c.close > c.open).length;
     if (greenCandles >= 3) score += 10;
     else if (greenCandles === 2) score += 7;
     else if (greenCandles === 1) score += 4;
@@ -167,7 +175,7 @@ const PSXVolumeTracker = () => {
     };
   }, []);
 
-  // Process individual tick and build 1-minute candles
+  // Process individual tick and build 30-second candles
   const processTick = (tick) => {
     const symbol = tick.s;
     const price = tick.c;
@@ -176,12 +184,12 @@ const PSXVolumeTracker = () => {
     const ldcp = tick.ldcp || tick.pc || price;
     const priceChange = tick.pch * 100;
 
-    const oneMinBlock = Math.floor(timestamp.getTime() / (1 * 60 * 1000));
+    const thirtySecBlock = Math.floor(timestamp.getTime() / (30 * 1000));
 
     let history = candleHistory.current[symbol];
     if (!history) {
       history = {
-        currentBlock: oneMinBlock,
+        currentBlock: thirtySecBlock,
         currentCandle: {
           open: price,
           high: price,
@@ -196,22 +204,22 @@ const PSXVolumeTracker = () => {
       candleHistory.current[symbol] = history;
     }
 
-    // Check if we moved to a new 1-minute block
-    if (oneMinBlock !== history.currentBlock) {
+    // Check if we moved to a new 30-second block
+    if (thirtySecBlock !== history.currentBlock) {
       // Finalize previous candle
       if (history.currentCandle.volume > 0) {
         history.completedCandles.push({
           ...history.currentCandle,
           block: history.currentBlock,
         });
-        // Keep last 30 candles
-        if (history.completedCandles.length > 30) {
+        // Keep last 60 candles (equivalent to ~30 minutes)
+        if (history.completedCandles.length > 60) {
           history.completedCandles.shift();
         }
       }
 
       // Start new candle
-      history.currentBlock = oneMinBlock;
+      history.currentBlock = thirtySecBlock;
       history.currentCandle = {
         open: price,
         high: price,
@@ -268,11 +276,13 @@ const PSXVolumeTracker = () => {
     const previousCandle = completedCandles[completedCandles.length - 1];
     const currentVolume = currentCandle.volume;
     const intradayAvgVolume =
-      completedCandles.reduce((acc, c) => acc + c.volume, 0) / completedCandles.length;
+      completedCandles.reduce((acc, c) => acc + c.volume, 0) /
+      completedCandles.length;
     const last2Candles = completedCandles.slice(-2);
     const last2AvgVolume =
       last2Candles.length > 0
-        ? last2Candles.reduce((acc, c) => acc + c.volume, 0) / last2Candles.length
+        ? last2Candles.reduce((acc, c) => acc + c.volume, 0) /
+          last2Candles.length
         : 0;
 
     const exceedsIntradayAvg = currentVolume > intradayAvgVolume;
@@ -281,7 +291,10 @@ const PSXVolumeTracker = () => {
     const currentPrice = currentCandle.close;
     const gainFromPrevCandle =
       ((currentPrice - previousCandle.close) / previousCandle.close) * 100;
-    const dayLow = Math.min(...completedCandles.map((c) => c.low), currentCandle.low);
+    const dayLow = Math.min(
+      ...completedCandles.map((c) => c.low),
+      currentCandle.low
+    );
     const gainFromDayLow = ((currentPrice - dayLow) / dayLow) * 100;
 
     if (
@@ -338,11 +351,13 @@ const PSXVolumeTracker = () => {
     const previousCandle = completedCandles[completedCandles.length - 1];
     const currentVolume = currentCandle.volume;
     const intradayAvgVolume =
-      completedCandles.reduce((acc, c) => acc + c.volume, 0) / completedCandles.length;
+      completedCandles.reduce((acc, c) => acc + c.volume, 0) /
+      completedCandles.length;
     const last2Candles = completedCandles.slice(-2);
     const last2AvgVolume =
       last2Candles.length > 0
-        ? last2Candles.reduce((acc, c) => acc + c.volume, 0) / last2Candles.length
+        ? last2Candles.reduce((acc, c) => acc + c.volume, 0) /
+          last2Candles.length
         : 0;
 
     const exceedsIntradayAvg = currentVolume > intradayAvgVolume;
@@ -350,7 +365,10 @@ const PSXVolumeTracker = () => {
     const currentPrice = currentCandle.close;
     const gainFromPrevCandle =
       ((currentPrice - previousCandle.close) / previousCandle.close) * 100;
-    const dayLow = Math.min(...completedCandles.map((c) => c.low), currentCandle.low);
+    const dayLow = Math.min(
+      ...completedCandles.map((c) => c.low),
+      currentCandle.low
+    );
     const gainFromDayLow = ((currentPrice - dayLow) / dayLow) * 100;
 
     const score = calculateSignalScore({
@@ -409,7 +427,7 @@ const PSXVolumeTracker = () => {
                   PSX Volume Surge Tracker
                 </h1>
                 <p className="text-slate-400 mt-1">
-                  1-Minute Candles • Trend Detection
+                  30-Second Candles • Trend Detection
                 </p>
               </div>
             </div>
@@ -454,7 +472,7 @@ const PSXVolumeTracker = () => {
             <div className="grid md:grid-cols-2 gap-6">
               <div>
                 <label className="block text-slate-300 mb-2 font-medium">
-                  Minimum Volume Threshold (per 1-min candle)
+                  Minimum Volume Threshold (per 30-sec candle)
                 </label>
                 <input
                   type="number"
@@ -509,99 +527,116 @@ const PSXVolumeTracker = () => {
             </div>
           ) : (
             <div className="grid gap-3">
-              {sortedSurgeStocks.map((stock) => {
-                const volRatio = stock.currentVolume / (stock.intradayAvgVolume || 1);
-                const strengthClass =
-                  stock.signalStrength === "Strong"
-                    ? "bg-emerald-600/30 text-emerald-300"
-                    : stock.signalStrength === "Medium"
-                    ? "bg-amber-600/30 text-amber-300"
-                    : "bg-rose-600/30 text-rose-300";
-                const scoreClass =
-                  stock.signalStrength === "Strong"
-                    ? "text-emerald-400"
-                    : stock.signalStrength === "Medium"
-                    ? "text-amber-400"
-                    : "text-red-400";
-                return (
-                  <div
-                    key={stock.alertId}
-                    className="bg-gradient-to-r from-emerald-500/10 to-teal-500/10 border border-emerald-500/30 rounded-lg p-4 hover:border-emerald-500/50 transition-all"
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-4">
-                        <div className="bg-emerald-500/20 p-3 rounded-lg">
-                          <TrendingUp className="w-6 h-6 text-emerald-400" />
+              {sortedSurgeStocks
+                .filter((stock) => {
+                  const score = stock.signalScore;
+                  const change = parseFloat(stock.change);
+                  return !(score < 70 && change >= 10);
+                })
+                .map((stock) => {
+                  const volRatio =
+                    stock.currentVolume / (stock.intradayAvgVolume || 1);
+                  const strengthClass =
+                    stock.signalStrength === "Strong"
+                      ? "bg-emerald-600/30 text-emerald-300"
+                      : stock.signalStrength === "Medium"
+                      ? "bg-amber-600/30 text-amber-300"
+                      : "bg-rose-600/30 text-rose-300";
+                  const scoreClass =
+                    stock.signalStrength === "Strong"
+                      ? "text-emerald-400"
+                      : stock.signalStrength === "Medium"
+                      ? "text-amber-400"
+                      : "text-red-400";
+                  return (
+                    <div
+                      key={stock.alertId}
+                      className="bg-gradient-to-r from-emerald-500/10 to-teal-500/10 border border-emerald-500/30 rounded-lg p-4 hover:border-emerald-500/50 transition-all"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-4">
+                          <div className="bg-emerald-500/20 p-3 rounded-lg">
+                            <TrendingUp className="w-6 h-6 text-emerald-400" />
+                          </div>
+                          <div>
+                            <h3 className="text-xl font-bold text-white">
+                              {stock.symbol}
+                            </h3>
+                            <div className="flex items-center gap-3 mt-1">
+                              <span
+                                className={`text-sm font-semibold px-2 py-1 rounded ${strengthClass}`}
+                              >
+                                {stock.signalStrength}
+                              </span>
+                              <p className="text-slate-400 text-sm">
+                                Score:{" "}
+                                <span className={`font-semibold ${scoreClass}`}>
+                                  {stock.signalScore}
+                                </span>
+                              </p>
+                            </div>
+                          </div>
                         </div>
-                        <div>
-                          <h3 className="text-xl font-bold text-white">
-                            {stock.symbol}
-                          </h3>
-                          <div className="flex items-center gap-3 mt-1">
-                            <span className={`text-sm font-semibold px-2 py-1 rounded ${strengthClass}`}>
-                              {stock.signalStrength}
-                            </span>
-                            <p className="text-slate-400 text-sm">
-                              Score: <span className={`font-semibold ${scoreClass}`}>{stock.signalScore}</span>
-                            </p>
+                        <div className="text-right">
+                          <div className="text-2xl font-bold text-white">
+                            Rs {stock.price}
+                          </div>
+                          <div
+                            className={`text-sm font-medium ${
+                              parseFloat(stock.change) >= 0
+                                ? "text-emerald-400"
+                                : "text-amber-400"
+                            }`}
+                          >
+                            {parseFloat(stock.change) >= 0 ? "+" : ""}
+                            {stock.change}%
                           </div>
                         </div>
                       </div>
-                      <div className="text-right">
-                        <div className="text-2xl font-bold text-white">
-                          Rs {stock.price}
+                      <div className="grid grid-cols-4 gap-3 mt-4 pt-4 border-t border-emerald-500/20">
+                        <div>
+                          <p className="text-slate-400 text-xs mb-1">
+                            Current Vol
+                          </p>
+                          <p className="text-white font-semibold">
+                            {formatVolume(stock.currentVolume)}{" "}
+                            <span className="text-emerald-400">
+                              ({volRatio.toFixed(1)}×)
+                            </span>
+                          </p>
                         </div>
-                        <div
-                          className={`text-sm font-medium ${
-                            parseFloat(stock.change) >= 0
-                              ? "text-emerald-400"
-                              : "text-amber-400"
-                          }`}
-                        >
-                          {parseFloat(stock.change) >= 0 ? "+" : ""}
-                          {stock.change}%
+                        <div>
+                          <p className="text-slate-400 text-xs mb-1">
+                            Gain from Prev
+                          </p>
+                          <p className="text-emerald-400 font-semibold">
+                            +{stock.gainFromPrevCandle}%
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-slate-400 text-xs mb-1">
+                            From Day Low
+                          </p>
+                          <p className="text-emerald-400 font-semibold">
+                            +{stock.gainFromDayLow}%
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-slate-400 text-xs mb-1">Updated</p>
+                          <p className="text-white font-semibold">
+                            {new Date(stock.lastUpdated).toLocaleTimeString(
+                              "en-PK",
+                              {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              }
+                            )}
+                          </p>
                         </div>
                       </div>
                     </div>
-                    <div className="grid grid-cols-4 gap-3 mt-4 pt-4 border-t border-emerald-500/20">
-                      <div>
-                        <p className="text-slate-400 text-xs mb-1">Current Vol</p>
-                        <p className="text-white font-semibold">
-                          {formatVolume(stock.currentVolume)}{" "}
-                          <span className="text-emerald-400">
-                            ({volRatio.toFixed(1)}×)
-                          </span>
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-slate-400 text-xs mb-1">
-                          Gain from Prev
-                        </p>
-                        <p className="text-emerald-400 font-semibold">
-                          +{stock.gainFromPrevCandle}%
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-slate-400 text-xs mb-1">
-                          From Day Low
-                        </p>
-                        <p className="text-emerald-400 font-semibold">
-                          +{stock.gainFromDayLow}%
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-slate-400 text-xs mb-1">Updated</p>
-                        <p className="text-white font-semibold">
-                          {new Date(stock.lastUpdated).toLocaleTimeString("en-PK", {
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
             </div>
           )}
         </div>
@@ -658,17 +693,20 @@ const PSXVolumeTracker = () => {
         </p>
         <ul className="text-blue-300 text-sm space-y-1 ml-4 list-disc">
           <li>
-            <strong>1-minute candles</strong> built from tick data for faster
+            <strong>30-second candles</strong> built from tick data for faster
             detection
           </li>
           <li>
-            <strong>Entry:</strong> Volume surge (exceeds avg) + gain from prev &gt; 0.5%
+            <strong>Entry:</strong> Volume surge (exceeds avg) + gain from prev
+            &gt; 0.5%
           </li>
           <li>
-            <strong>Continuous updates:</strong> Existing alerts update on every tick
+            <strong>Continuous updates:</strong> Existing alerts update on every
+            tick
           </li>
           <li>
-            <strong>No exit conditions:</strong> Alerts persist until market close
+            <strong>No exit conditions:</strong> Alerts persist until market
+            close
           </li>
           <li>
             <strong>Dynamic stock list:</strong> Fetched from API on startup
