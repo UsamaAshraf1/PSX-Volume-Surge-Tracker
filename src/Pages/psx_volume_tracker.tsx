@@ -27,20 +27,20 @@ const PSXVolumeTracker = () => {
 
     let score = 0;
 
-    // 1️⃣ Volume Surge Strength (30 pts)
+    // Volume Surge Strength (30)
     const volRatio = currentVolume / (intradayAvgVolume || 1);
     if (volRatio >= 3) score += 30;
     else if (volRatio >= 2) score += 22;
     else if (volRatio >= 1.5) score += 15;
     else if (volRatio >= 1.2) score += 10;
 
-    // 2️⃣ Price Momentum (25 pts)
+    // Price Momentum (25)
     if (gainFromPrevCandle >= 2) score += 25;
     else if (gainFromPrevCandle >= 1) score += 18;
     else if (gainFromPrevCandle >= 0.5) score += 10;
     else if (gainFromPrevCandle > 0) score += 5;
 
-    // 3️⃣ Price Position vs Day Range (20 pts)
+    // Price Position (20)
     const dayHigh = Math.max(
       ...completedCandles.map((c) => c.high),
       currentCandle.high
@@ -56,11 +56,11 @@ const PSXVolumeTracker = () => {
     else if (position > 60) score += 10;
     else if (position > 50) score += 5;
 
-    // 4️⃣ Volume Quality (15 pts)
+    // Volume Quality (15)
     if (exceedsIntradayAvg && exceedsLast2Avg) score += 15;
     else if (exceedsIntradayAvg || exceedsLast2Avg) score += 8;
 
-    // 5️⃣ Candle Consistency (10 pts)
+    // Candle Consistency (10)
     const greenCandles = completedCandles
       .slice(-3)
       .filter((c) => c.close > c.open).length;
@@ -71,125 +71,102 @@ const PSXVolumeTracker = () => {
     return Math.min(score, 100);
   };
 
-  // 🔹 Helper: strength label
+  // 🔹 Helper: signal strength
   const getSignalStrength = (score) => {
     if (score >= 80) return "Strong";
     if (score >= 55) return "Medium";
     return "Weak";
   };
 
-  // Check if market is open (9:30 AM - 3:30 PM PKT)
+  // 🔹 Detect and count winning streaks dynamically
+  const getWinningStreakCount = (completedCandles) => {
+    if (!completedCandles || completedCandles.length === 0) return 0;
+    let streak = 0;
+    for (let i = completedCandles.length - 1; i >= 0; i--) {
+      const c = completedCandles[i];
+      const prev = completedCandles[i - 1];
+      if (c.close > c.open && (!prev || c.close > prev.close)) streak++;
+      else break;
+    }
+    return streak;
+  };
+
+  // 🔹 Market hours
   useEffect(() => {
     const checkMarketHours = () => {
       const now = new Date();
       const hours = now.getHours();
       const minutes = now.getMinutes();
       const currentMinutes = hours * 60 + minutes;
-      const marketOpen = 9 * 60 + 30;
-      const marketClose = 15 * 60 + 30;
-
-      setIsMarketOpen(
-        currentMinutes >= marketOpen && currentMinutes < marketClose
-      );
+      const open = 9 * 60 + 30;
+      const close = 15 * 60 + 30;
+      setIsMarketOpen(currentMinutes >= open && currentMinutes < close);
       setCurrentTime(now);
     };
-
     checkMarketHours();
     const interval = setInterval(checkMarketHours, 60000);
     return () => clearInterval(interval);
   }, []);
 
-  // Fetch stock list from API and setup WebSocket
+  // 🔹 Fetch symbols and connect websocket
   useEffect(() => {
     const fetchStockList = async () => {
       try {
-        // TODO: Replace with your actual API endpoint
-        const response = await fetch(
+        const res = await fetch(
           "https://ielapis.u2ventures.io/api/psxApi/search/all-stocks/"
         );
-        const stockList = await response.json();
-
-        // Assuming API returns array of symbols or objects with symbol property
-        const symbols = Array.isArray(stockList.stocks)
-          ? stockList?.stocks?.map((item) =>
-              typeof item === "string" ? item : item.symbol
-            )
+        const data = await res.json();
+        const symbols = Array.isArray(data.stocks)
+          ? data.stocks.map((s) => (typeof s === "string" ? s : s.symbol))
           : [];
-
         setTrackedSymbols(symbols);
         return symbols;
-      } catch (error) {
-        console.error("Error fetching stock list:", error);
-        // Fallback to a small list for testing
-        const fallbackSymbols = ["PSO", "OGDC", "PPL", "HBL", "MCB"];
-        setTrackedSymbols(fallbackSymbols);
-        return fallbackSymbols;
+      } catch (e) {
+        console.error("Stock list error:", e);
+        const fallback = ["PSO", "OGDC", "PPL", "HBL", "MCB"];
+        setTrackedSymbols(fallback);
+        return fallback;
       }
     };
 
-    const connectWebSocket = async () => {
+    const connect = async () => {
       const symbols = await fetchStockList();
-
       wsRef.current = new WebSocket(
         "wss://ielapis.u2ventures.io/ws/market/feed/"
       );
-
       wsRef.current.onopen = () => {
-        console.log("WebSocket connected");
-        // Subscribe to all tracked symbols
-        symbols.forEach((symbol) => {
-          wsRef.current.send(JSON.stringify({ symbol }));
-        });
+        symbols.forEach((sym) =>
+          wsRef.current.send(JSON.stringify({ symbol: sym }))
+        );
       };
-
-      wsRef.current.onmessage = (event) => {
+      wsRef.current.onmessage = (e) => {
         try {
-          const msg = JSON.parse(event.data);
-          if (msg.message === "Received tick" && msg.data?.type === "tick") {
-            const tick = msg.data.data;
-            const symbol = tick.s;
-            if (!symbols.includes(symbol)) return;
-
-            processTick(tick);
-          }
-        } catch (e) {
-          console.error("Error parsing WebSocket message:", e);
+          const msg = JSON.parse(e.data);
+          if (msg.message === "Received tick" && msg.data?.type === "tick")
+            processTick(msg.data.data);
+        } catch (err) {
+          console.error("Tick error:", err);
         }
       };
-
-      wsRef.current.onclose = () => {
-        console.log("WebSocket disconnected");
-      };
-
-      wsRef.current.onerror = (error) => {
-        console.error("WebSocket error:", error);
-      };
     };
-
-    connectWebSocket();
-
-    return () => {
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
-    };
+    connect();
+    return () => wsRef.current?.close();
   }, []);
 
-  // Process individual tick and build 30-second candles
+  // 🔹 Process each tick
   const processTick = (tick) => {
     const symbol = tick.s;
     const price = tick.c;
     const volume = tick.v;
     const timestamp = new Date(tick.t * 1000);
     const ldcp = tick.ldcp || tick.pc || price;
-    const priceChange = tick.pch * 100;
-
-    const thirtySecBlock = Math.floor(timestamp.getTime() / (30 * 1000));
+    const change = tick.pch * 100;
+    const block = Math.floor(timestamp.getTime() / (30 * 1000));
 
     let history = candleHistory.current[symbol];
     if (!history) {
       history = {
-        currentBlock: thirtySecBlock,
+        currentBlock: block,
         currentCandle: {
           open: price,
           high: price,
@@ -199,27 +176,18 @@ const PSXVolumeTracker = () => {
           startVol: volume,
         },
         completedCandles: [],
-        ldcp: ldcp,
+        ldcp,
       };
       candleHistory.current[symbol] = history;
     }
 
-    // Check if we moved to a new 30-second block
-    if (thirtySecBlock !== history.currentBlock) {
-      // Finalize previous candle
+    if (block !== history.currentBlock) {
       if (history.currentCandle.volume > 0) {
-        history.completedCandles.push({
-          ...history.currentCandle,
-          block: history.currentBlock,
-        });
-        // Keep last 60 candles (equivalent to ~30 minutes)
-        if (history.completedCandles.length > 60) {
+        history.completedCandles.push({ ...history.currentCandle });
+        if (history.completedCandles.length > 60)
           history.completedCandles.shift();
-        }
       }
-
-      // Start new candle
-      history.currentBlock = thirtySecBlock;
+      history.currentBlock = block;
       history.currentCandle = {
         open: price,
         high: price,
@@ -230,488 +198,173 @@ const PSXVolumeTracker = () => {
       };
     }
 
-    // Update current candle
     history.currentCandle.high = Math.max(history.currentCandle.high, price);
     history.currentCandle.low = Math.min(history.currentCandle.low, price);
     history.currentCandle.close = price;
     history.currentCandle.volume = volume - history.currentCandle.startVol;
 
-    // Update live stock display
     const stock = {
       symbol,
-      price: price.toFixed(2),
-      volume: volume,
-      change: priceChange.toFixed(2),
-      timestamp: timestamp,
-      ldcp: ldcp,
-      history, // Include history for surge logic
+      price,
+      volume,
+      change,
+      timestamp,
+      ldcp,
+      history,
     };
 
     setStocks((prev) => {
-      const index = prev.findIndex((s) => s.symbol === symbol);
-      if (index > -1) {
-        const newStocks = [...prev];
-        newStocks[index] = stock;
-        return newStocks;
-      } else {
-        return [...prev, stock];
-      }
+      const idx = prev.findIndex((s) => s.symbol === symbol);
+      if (idx > -1) {
+        const updated = [...prev];
+        updated[idx] = stock;
+        return updated;
+      } else return [...prev, stock];
     });
 
-    // Check/update surge conditions
-    const existingAlert = surgeStocks.find((s) => s.symbol === symbol);
-    if (existingAlert) {
-      updateExistingSurges(symbol, history, stock);
-    } else {
-      checkSurgeConditions(symbol, history, stock);
-    }
+    const existing = surgeStocks.find((s) => s.symbol === symbol);
+    if (existing) updateSurge(symbol, history, stock);
+    else checkSurge(symbol, history, stock);
   };
 
-  // ✅ Detect New Surges (updated logic)
-  const checkSurgeConditions = (symbol, history, stock) => {
-    const completedCandles = history.completedCandles || [];
-    const currentCandle = history.currentCandle || {};
-    if (completedCandles.length < 2 || !currentCandle) return;
+  // ✅ New surge detection
+  const checkSurge = (symbol, history, stock) => {
+    const completed = history.completedCandles || [];
+    const current = history.currentCandle || {};
+    if (completed.length < 3) return;
 
-    const previousCandle = completedCandles[completedCandles.length - 1];
-    const currentVolume = currentCandle.volume;
-    const intradayAvgVolume =
-      completedCandles.reduce((acc, c) => acc + c.volume, 0) /
-      completedCandles.length;
-    const last2Candles = completedCandles.slice(-2);
-    const last2AvgVolume =
-      last2Candles.length > 0
-        ? last2Candles.reduce((acc, c) => acc + c.volume, 0) /
-          last2Candles.length
-        : 0;
+    const prev = completed[completed.length - 1];
+    const volNow = current.volume;
+    const intradayAvg =
+      completed.reduce((a, c) => a + c.volume, 0) / completed.length;
+    const last2Avg = completed.slice(-2).reduce((a, c) => a + c.volume, 0) / 2;
+    const exceedsIntra = volNow > intradayAvg;
+    const exceedsLast2 = volNow > last2Avg;
+    const priceNow = current.close;
+    const gainPrev = ((priceNow - prev.close) / prev.close) * 100;
+    const dayLow = Math.min(...completed.map((c) => c.low), current.low);
+    const gainDay = ((priceNow - dayLow) / dayLow) * 100;
 
-    const exceedsIntradayAvg = currentVolume > intradayAvgVolume;
-    const exceedsLast2Avg = currentVolume > last2AvgVolume;
-
-    const currentPrice = currentCandle.close;
-    const gainFromPrevCandle =
-      ((currentPrice - previousCandle.close) / previousCandle.close) * 100;
-    const dayLow = Math.min(
-      ...completedCandles.map((c) => c.low),
-      currentCandle.low
-    );
-    const gainFromDayLow = ((currentPrice - dayLow) / dayLow) * 100;
-
-    if (
-      exceedsIntradayAvg &&
-      exceedsLast2Avg &&
-      gainFromPrevCandle > 0.5 &&
-      gainFromDayLow > 1
-    ) {
+    if (exceedsIntra && exceedsLast2 && gainPrev > 0.5 && gainDay > 1) {
       const score = calculateSignalScore({
-        currentVolume,
-        intradayAvgVolume,
-        last2AvgVolume,
-        gainFromPrevCandle,
-        gainFromDayLow,
-        exceedsIntradayAvg,
-        exceedsLast2Avg,
-        completedCandles,
-        currentCandle,
+        currentVolume: volNow,
+        intradayAvgVolume: intradayAvg,
+        last2AvgVolume: last2Avg,
+        gainFromPrevCandle: gainPrev,
+        gainFromDayLow: gainDay,
+        exceedsIntradayAvg: exceedsIntra,
+        exceedsLast2Avg: exceedsLast2,
+        completedCandles: completed,
+        currentCandle: current,
       });
+      const streak = getWinningStreakCount(completed);
 
-      const surgeData = {
+      const surge = {
         ...stock,
-        alertId: `${symbol}-alert`,
-        entryPrice: currentPrice,
-        entryTime: new Date(),
-        currentVolume,
-        intradayAvgVolume,
-        last2AvgVolume,
-        exceedsIntradayAvg,
-        exceedsLast2Avg,
-        gainFromPrevCandle: gainFromPrevCandle.toFixed(2),
-        gainFromDayLow: gainFromDayLow.toFixed(2),
-        prevCandleClose: previousCandle.close.toFixed(2),
+        entryPrice: priceNow,
         surgeTime: new Date(),
         signalScore: score,
         signalStrength: getSignalStrength(score),
-        lastUpdated: new Date(),
+        currentVolume: volNow,
+        streak,
       };
 
-      setSurgeStocks((prev) => {
-        // Remove any existing alert for this symbol to ensure only one
-        const filtered = prev.filter((s) => s.symbol !== symbol);
-        return [...filtered, surgeData].slice(-20);
-      });
+      setSurgeStocks((prev) => [
+        ...prev.filter((s) => s.symbol !== symbol),
+        surge,
+      ]);
     }
   };
 
-  // ✅ Update Existing Signals Continuously (new function)
-  const updateExistingSurges = (symbol, history, stock) => {
-    const completedCandles = history.completedCandles || [];
-    const currentCandle = history.currentCandle || {};
-    if (completedCandles.length < 2 || !currentCandle) return;
-
-    const previousCandle = completedCandles[completedCandles.length - 1];
-    const currentVolume = currentCandle.volume;
-    const intradayAvgVolume =
-      completedCandles.reduce((acc, c) => acc + c.volume, 0) /
-      completedCandles.length;
-    const last2Candles = completedCandles.slice(-2);
-    const last2AvgVolume =
-      last2Candles.length > 0
-        ? last2Candles.reduce((acc, c) => acc + c.volume, 0) /
-          last2Candles.length
-        : 0;
-
-    const exceedsIntradayAvg = currentVolume > intradayAvgVolume;
-    const exceedsLast2Avg = currentVolume > last2AvgVolume;
-    const currentPrice = currentCandle.close;
-    const gainFromPrevCandle =
-      ((currentPrice - previousCandle.close) / previousCandle.close) * 100;
-    const dayLow = Math.min(
-      ...completedCandles.map((c) => c.low),
-      currentCandle.low
-    );
-    const gainFromDayLow = ((currentPrice - dayLow) / dayLow) * 100;
-
-    const score = calculateSignalScore({
-      currentVolume,
-      intradayAvgVolume,
-      last2AvgVolume,
-      gainFromPrevCandle,
-      gainFromDayLow,
-      exceedsIntradayAvg,
-      exceedsLast2Avg,
-      completedCandles,
-      currentCandle,
-    });
+  // 🔁 Update existing surge streak
+  const updateSurge = (symbol, history, stock) => {
+    const completed = history.completedCandles || [];
+    const current = history.currentCandle || {};
+    if (completed.length < 2) return;
+    const streak = getWinningStreakCount(completed);
 
     setSurgeStocks((prev) =>
-      prev.map((s) => {
-        if (s.symbol === symbol) {
-          return {
-            ...s,
-            ...stock,
-            currentVolume,
-            gainFromPrevCandle: gainFromPrevCandle.toFixed(2),
-            gainFromDayLow: gainFromDayLow.toFixed(2),
-            prevCandleClose: previousCandle.close.toFixed(2),
-            signalScore: score,
-            signalStrength: getSignalStrength(score),
-            lastUpdated: new Date(),
-          };
-        }
-        return s;
-      })
+      prev.map((s) =>
+        s.symbol === symbol
+          ? { ...s, price: stock.price, streak, lastUpdated: new Date() }
+          : s
+      )
     );
   };
 
-  const formatVolume = (vol) => {
-    if (vol >= 1000000) return `${(vol / 1000000).toFixed(2)}M`;
-    if (vol >= 1000) return `${(vol / 1000).toFixed(2)}K`;
-    return vol?.toString();
-  };
+  const formatVol = (v) =>
+    v >= 1e6
+      ? `${(v / 1e6).toFixed(2)}M`
+      : v >= 1e3
+      ? `${(v / 1e3).toFixed(1)}K`
+      : v;
 
-  // Sort surge stocks by signalScore descending (highest on top)
-  const sortedSurgeStocks = [...surgeStocks].sort(
-    (a, b) => b.signalScore - a.signalScore
-  );
+  const sorted = [...surgeStocks].sort((a, b) => b.signalScore - a.signalScore);
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-6">
-      <div className="max-w-7xl mx-auto">
-        {/* Header */}
-        <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-6 mb-6 border border-slate-700">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <Activity className="w-8 h-8 text-emerald-400" />
-              <div>
-                <h1 className="text-3xl font-bold text-white">
-                  PSX Volume Surge Tracker
-                </h1>
-                <p className="text-slate-400 mt-1">
-                  30-Second Candles • Trend Detection
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-4">
-              <button
-                onClick={() => setShowSettings(!showSettings)}
-                className="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors"
-              >
-                <Settings className="w-6 h-6 text-slate-300" />
-              </button>
-              <div className="text-right">
-                <div className="flex items-center gap-2 justify-end mb-1">
-                  <div
-                    className={`w-3 h-3 rounded-full ${
-                      isMarketOpen
-                        ? "bg-emerald-400 animate-pulse"
-                        : "bg-red-400"
-                    }`}
-                  ></div>
-                  <span className="text-slate-300 font-medium">
-                    {isMarketOpen ? "Market Open" : "Market Closed"}
-                  </span>
-                </div>
-                <p className="text-slate-400 text-sm">
-                  {currentTime.toLocaleTimeString("en-PK", {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })}
-                </p>
-              </div>
-            </div>
-          </div>
+    <div className="min-h-screen bg-slate-900 p-6">
+      <div className="max-w-6xl mx-auto">
+        <div className="flex justify-between mb-6 items-center">
+          <h1 className="text-2xl text-white font-bold flex items-center gap-2">
+            <Activity className="text-emerald-400" /> PSX Volume + Streak
+            Tracker
+          </h1>
+          <span
+            className={`text-sm px-3 py-1 rounded-full ${
+              isMarketOpen
+                ? "bg-emerald-500/20 text-emerald-300"
+                : "bg-red-500/20 text-red-300"
+            }`}
+          >
+            {isMarketOpen ? "Market Open" : "Market Closed"}
+          </span>
         </div>
 
-        {/* Settings Panel */}
-        {showSettings && (
-          <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-6 mb-6 border border-slate-700">
-            <h2 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
-              <Settings className="w-5 h-5" />
-              Alert Settings
-            </h2>
-            <div className="grid md:grid-cols-2 gap-6">
-              <div>
-                <label className="block text-slate-300 mb-2 font-medium">
-                  Minimum Volume Threshold (per 30-sec candle)
-                </label>
-                <input
-                  type="number"
-                  value={0}
-                  disabled
-                  className="w-full bg-slate-700 text-white px-4 py-2 rounded-lg border border-slate-600 focus:border-emerald-400 focus:outline-none opacity-50"
-                  placeholder="Fixed at 0"
-                />
-                <p className="text-slate-400 text-sm mt-1">
-                  Current: No minimum
-                </p>
-              </div>
-              <div>
-                <label className="block text-slate-300 mb-2 font-medium">
-                  Surge Threshold Multiplier
-                </label>
-                <input
-                  type="number"
-                  step="0.1"
-                  value={1}
-                  disabled
-                  className="w-full bg-slate-700 text-white px-4 py-2 rounded-lg border border-slate-600 focus:border-emerald-400 focus:outline-none opacity-50"
-                  placeholder="Fixed at 1.0"
-                />
-                <p className="text-slate-400 text-sm mt-1">
-                  Candle volume must exceed average
-                </p>
-              </div>
-            </div>
+        {sorted.length === 0 ? (
+          <div className="text-center text-slate-400 py-20">
+            <AlertCircle className="w-12 h-12 mx-auto mb-3 opacity-50" />
+            <p>No surges yet — waiting for conditions</p>
+          </div>
+        ) : (
+          <div className="grid gap-3">
+            {sorted
+              .filter(
+                (stock) =>
+                  stock.signalScore >= 70 && parseFloat(stock.change) < 10
+              )
+              .map((s) => (
+                <div
+                  key={s.symbol}
+                  className="bg-slate-800/60 p-4 rounded-lg border border-slate-700 flex justify-between items-center hover:bg-slate-800"
+                >
+                  <div>
+                    <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                      {s.symbol}
+                      <span className="text-xs text-amber-300 bg-amber-500/20 px-2 py-0.5 rounded-full">
+                        🔥 Streak: {s.streak}
+                      </span>
+                    </h2>
+                    <p className="text-slate-400 text-sm">
+                      Entry {s.entryPrice} • Vol {formatVol(s.currentVolume)}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <span
+                      className={`font-bold text-lg ${
+                        s.signalStrength === "Strong"
+                          ? "text-emerald-400"
+                          : s.signalStrength === "Medium"
+                          ? "text-amber-400"
+                          : "text-slate-300"
+                      }`}
+                    >
+                      {s.signalStrength} ({s.signalScore})
+                    </span>
+                  </div>
+                </div>
+              ))}
           </div>
         )}
-
-        {/* Volume Surge Alerts */}
-        <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-6 mb-6 border border-slate-700">
-          <div className="flex items-center gap-2 mb-4">
-            <TrendingUp className="w-6 h-6 text-amber-400" />
-            <h2 className="text-xl font-bold text-white">
-              Active Volume Surge Alerts
-            </h2>
-            <span className="ml-auto bg-emerald-500/20 text-emerald-300 px-3 py-1 rounded-full text-sm font-medium">
-              {sortedSurgeStocks.length} Active
-            </span>
-          </div>
-
-          {sortedSurgeStocks.length === 0 ? (
-            <div className="text-center py-12 text-slate-400">
-              <AlertCircle className="w-12 h-12 mx-auto mb-3 opacity-50" />
-              <p>No active volume surges</p>
-              <p className="text-sm mt-1">
-                Stocks with volume surge + uptrend will appear here
-              </p>
-            </div>
-          ) : (
-            <div className="grid gap-3">
-              {sortedSurgeStocks
-                .filter((stock) => {
-                  const score = stock.signalScore;
-                  const change = parseFloat(stock.change);
-                  return !(score < 70 && change >= 10);
-                })
-                .map((stock) => {
-                  const volRatio =
-                    stock.currentVolume / (stock.intradayAvgVolume || 1);
-                  const strengthClass =
-                    stock.signalStrength === "Strong"
-                      ? "bg-emerald-600/30 text-emerald-300"
-                      : stock.signalStrength === "Medium"
-                      ? "bg-amber-600/30 text-amber-300"
-                      : "bg-rose-600/30 text-rose-300";
-                  const scoreClass =
-                    stock.signalStrength === "Strong"
-                      ? "text-emerald-400"
-                      : stock.signalStrength === "Medium"
-                      ? "text-amber-400"
-                      : "text-red-400";
-                  return (
-                    <div
-                      key={stock.alertId}
-                      className="bg-gradient-to-r from-emerald-500/10 to-teal-500/10 border border-emerald-500/30 rounded-lg p-4 hover:border-emerald-500/50 transition-all"
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-4">
-                          <div className="bg-emerald-500/20 p-3 rounded-lg">
-                            <TrendingUp className="w-6 h-6 text-emerald-400" />
-                          </div>
-                          <div>
-                            <h3 className="text-xl font-bold text-white">
-                              {stock.symbol}
-                            </h3>
-                            <div className="flex items-center gap-3 mt-1">
-                              <span
-                                className={`text-sm font-semibold px-2 py-1 rounded ${strengthClass}`}
-                              >
-                                {stock.signalStrength}
-                              </span>
-                              <p className="text-slate-400 text-sm">
-                                Score:{" "}
-                                <span className={`font-semibold ${scoreClass}`}>
-                                  {stock.signalScore}
-                                </span>
-                              </p>
-                            </div>
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <div className="text-2xl font-bold text-white">
-                            Rs {stock.price}
-                          </div>
-                          <div
-                            className={`text-sm font-medium ${
-                              parseFloat(stock.change) >= 0
-                                ? "text-emerald-400"
-                                : "text-amber-400"
-                            }`}
-                          >
-                            {parseFloat(stock.change) >= 0 ? "+" : ""}
-                            {stock.change}%
-                          </div>
-                        </div>
-                      </div>
-                      <div className="grid grid-cols-4 gap-3 mt-4 pt-4 border-t border-emerald-500/20">
-                        <div>
-                          <p className="text-slate-400 text-xs mb-1">
-                            Current Vol
-                          </p>
-                          <p className="text-white font-semibold">
-                            {formatVolume(stock.currentVolume)}{" "}
-                            <span className="text-emerald-400">
-                              ({volRatio.toFixed(1)}×)
-                            </span>
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-slate-400 text-xs mb-1">
-                            Gain from Prev
-                          </p>
-                          <p className="text-emerald-400 font-semibold">
-                            +{stock.gainFromPrevCandle}%
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-slate-400 text-xs mb-1">
-                            From Day Low
-                          </p>
-                          <p className="text-emerald-400 font-semibold">
-                            +{stock.gainFromDayLow}%
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-slate-400 text-xs mb-1">Updated</p>
-                          <p className="text-white font-semibold">
-                            {new Date(stock.lastUpdated).toLocaleTimeString(
-                              "en-PK",
-                              {
-                                hour: "2-digit",
-                                minute: "2-digit",
-                              }
-                            )}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* All Stocks Grid */}
-      <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-6 border border-slate-700">
-        <h2 className="text-xl font-bold text-white mb-4">
-          Live Stock Feed ({stocks.length} stocks)
-        </h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {stocks.map((stock, idx) => (
-            <div
-              key={`${stock.symbol}-${idx}`}
-              className="bg-slate-700/30 rounded-lg p-4 border border-slate-600 hover:border-slate-500 transition-all"
-            >
-              <div className="flex justify-between items-start mb-3">
-                <h3 className="text-lg font-bold text-white">{stock.symbol}</h3>
-                <span
-                  className={`text-sm font-medium px-2 py-1 rounded ${
-                    parseFloat(stock.change) >= 0
-                      ? "bg-emerald-500/20 text-emerald-400"
-                      : "bg-red-500/20 text-red-400"
-                  }`}
-                >
-                  {parseFloat(stock.change) >= 0 ? "+" : ""}
-                  {stock.change}%
-                </span>
-              </div>
-              <div className="text-2xl font-bold text-white mb-2">
-                Rs {stock.price}
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-slate-400">Session Volume</span>
-                <span
-                  className={`font-semibold ${
-                    stock.volume > 100000
-                      ? "text-emerald-400"
-                      : "text-slate-300"
-                  }`}
-                >
-                  {formatVolume(stock.volume)}
-                </span>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Instructions */}
-      <div className="mt-6 bg-blue-500/10 border border-blue-500/30 rounded-lg p-4">
-        <p className="text-blue-300 text-sm mb-2">
-          <strong>Enhanced Detection System:</strong>
-        </p>
-        <ul className="text-blue-300 text-sm space-y-1 ml-4 list-disc">
-          <li>
-            <strong>30-second candles</strong> built from tick data for faster
-            detection
-          </li>
-          <li>
-            <strong>Entry:</strong> Volume surge (exceeds avg) + gain from prev
-            &gt; 0.5%
-          </li>
-          <li>
-            <strong>Continuous updates:</strong> Existing alerts update on every
-            tick
-          </li>
-          <li>
-            <strong>No exit conditions:</strong> Alerts persist until market
-            close
-          </li>
-          <li>
-            <strong>Dynamic stock list:</strong> Fetched from API on startup
-          </li>
-        </ul>
       </div>
     </div>
   );
